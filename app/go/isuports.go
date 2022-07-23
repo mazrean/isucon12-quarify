@@ -204,6 +204,12 @@ func Run() {
 		return
 	}
 
+	err = initSqliteIndex(context.Background())
+	if err != nil {
+		e.Logger.Fatalf("failed to initSqliteIndex: %v", err)
+		return
+	}
+
 	port := getEnv("SERVER_APP_PORT", "3000")
 	e.Logger.Infof("starting isuports server on : %s ...", port)
 	serverPort := fmt.Sprintf(":%s", port)
@@ -1702,6 +1708,45 @@ type MeHandlerResult struct {
 	LoggedIn bool          `json:"logged_in"`
 }
 
+func initSqliteIndex(ctx context.Context) error {
+	tenantDBDir := getEnv("ISUCON_TENANT_DB_DIR", "../tenant_db")
+	dir, err := os.ReadDir(tenantDBDir)
+	if err != nil {
+		return fmt.Errorf("failed to os.Stat: %w", err)
+	}
+
+	for _, file := range dir {
+		if file.IsDir() {
+			continue
+		}
+
+		if !strings.HasSuffix(file.Name(), ".db") {
+			continue
+		}
+		strTenantID := strings.TrimSuffix(file.Name(), ".db")
+		tenantID, err := strconv.Atoi(strTenantID)
+		if err != nil {
+			return fmt.Errorf("failed to strconv.Atoi: %w", err)
+		}
+
+		tenantDB, err := connectToTenantDB(int64(tenantID))
+		if err != nil {
+			return fmt.Errorf("failed to connectToTenantDB: %w", err)
+		}
+
+		var players []PlayerRow
+		if _, err := tenantDB.ExecContext(ctx, "create index idx_player_score_score_row_num on player_score(score,row_num)"); err != nil {
+			return fmt.Errorf("failed to Select player: %w", err)
+		}
+		for _, player := range players {
+			key := playerCacheKey(player.TenantID, player.ID)
+			playerCache.Store(key, player)
+		}
+	}
+
+	return nil
+}
+
 // 共通API
 // GET /api/me
 // JWTで認証した結果、テナントやユーザ情報を返す
@@ -1797,6 +1842,11 @@ func initializeHandler(c echo.Context) error {
 	err = initCompetitionCache(c.Request().Context())
 	if err != nil {
 		return fmt.Errorf("error initCompetitionCache: %w", err)
+	}
+
+	err = initSqliteIndex(c.Request().Context())
+	if err != nil {
+		return fmt.Errorf("error initSqliteIndex: %w", err)
 	}
 
 	out, err := exec.Command(initializeScript).CombinedOutput()
