@@ -199,6 +199,12 @@ func Run() {
 		return
 	}
 
+	err = initCompetitionCache(context.Background())
+	if err != nil {
+		e.Logger.Fatalf("failed to initCompetitionCache: %v", err)
+		return
+	}
+
 	port := getEnv("SERVER_APP_PORT", "3000")
 	e.Logger.Infof("starting isuports server on : %s ...", port)
 	serverPort := fmt.Sprintf(":%s", port)
@@ -465,11 +471,58 @@ type CompetitionRow struct {
 	UpdatedAt  int64         `db:"updated_at"`
 }
 
+var competitionCache = isucache.NewMap[string, CompetitionRow]("competition")
+
+func competitionCacheKey(tenantID int64, competitionID string) string {
+	return fmt.Sprintf("%d:%s", tenantID, competitionID)
+}
+
+func initCompetitionCache(ctx context.Context) error {
+	tenantDBDir := getEnv("ISUCON_TENANT_DB_DIR", "../tenant_db")
+	dir, err := os.ReadDir(tenantDBDir)
+	if err != nil {
+		return fmt.Errorf("failed to os.Stat: %w", err)
+	}
+
+	for _, file := range dir {
+		if file.IsDir() {
+			continue
+		}
+
+		if !strings.HasSuffix(file.Name(), ".db") {
+			continue
+		}
+		strTenantID := strings.TrimSuffix(file.Name(), ".db")
+		tenantID, err := strconv.Atoi(strTenantID)
+		if err != nil {
+			return fmt.Errorf("failed to strconv.Atoi: %w", err)
+		}
+
+		tenantDB, err := connectToTenantDB(int64(tenantID))
+		if err != nil {
+			return fmt.Errorf("failed to connectToTenantDB: %w", err)
+		}
+
+		var competitions []CompetitionRow
+		if err := tenantDB.SelectContext(ctx, &competitions, "SELECT * FROM competition"); err != nil {
+			return fmt.Errorf("failed to Select player: %w", err)
+		}
+		for _, competition := range competitions {
+			key := playerCacheKey(competition.TenantID, competition.ID)
+			competitionCache.Store(key, competition)
+		}
+	}
+
+	return nil
+}
+
 // 大会を取得する
-func retrieveCompetition(ctx context.Context, tenantDB dbOrTx, id string) (*CompetitionRow, error) {
-	var c CompetitionRow
-	if err := tenantDB.GetContext(ctx, &c, "SELECT * FROM competition WHERE id = ?", id); err != nil {
-		return nil, fmt.Errorf("error Select competition: id=%s, %w", id, err)
+func retrieveCompetition(ctx context.Context, tenantDB dbOrTx, tenantId int64, id string) (*CompetitionRow, error) {
+	c, ok := competitionCache.Load(competitionCacheKey(tenantId, id))
+	if !ok {
+		if err := tenantDB.GetContext(ctx, &c, "SELECT * FROM competition WHERE id = ?", id); err != nil {
+			return nil, fmt.Errorf("error Select competition: id=%s, %w", id, err)
+		}
 	}
 	return &c, nil
 }
@@ -608,7 +661,7 @@ type VisitHistorySummaryRow struct {
 
 // 大会ごとの課金レポートを計算する
 func billingReportByCompetition(ctx context.Context, tenantDB dbOrTx, tenantID int64, competitonID string) (*BillingReport, error) {
-	comp, err := retrieveCompetition(ctx, tenantDB, competitonID)
+	comp, err := retrieveCompetition(ctx, tenantDB, tenantID, competitonID)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieveCompetition: %w", err)
 	}
@@ -1018,6 +1071,15 @@ func competitionsAddHandler(c echo.Context) error {
 		)
 	}
 
+	competitionCache.Store(competitionCacheKey(v.tenantID, id), CompetitionRow{
+		ID:         id,
+		TenantID:   v.tenantID,
+		Title:      title,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		FinishedAt: sql.NullInt64{},
+	})
+
 	res := CompetitionsAddHandlerResult{
 		Competition: CompetitionDetail{
 			ID:         id,
@@ -1050,7 +1112,7 @@ func competitionFinishHandler(c echo.Context) error {
 	if id == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "competition_id required")
 	}
-	_, err = retrieveCompetition(ctx, tenantDB, id)
+	_, err = retrieveCompetition(ctx, tenantDB, v.tenantID, id)
 	if err != nil {
 		// 存在しない大会
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1100,7 +1162,7 @@ func competitionScoreHandler(c echo.Context) error {
 	if competitionID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "competition_id required")
 	}
-	comp, err := retrieveCompetition(ctx, tenantDB, competitionID)
+	comp, err := retrieveCompetition(ctx, tenantDB, v.tenantID, competitionID)
 	if err != nil {
 		// 存在しない大会
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1372,7 +1434,7 @@ func playerHandler(c echo.Context) error {
 
 	psds := make([]PlayerScoreDetail, 0, len(pss))
 	for _, ps := range pss {
-		comp, err := retrieveCompetition(ctx, tenantDB, ps.CompetitionID)
+		comp, err := retrieveCompetition(ctx, tenantDB, v.tenantID, ps.CompetitionID)
 		if err != nil {
 			return fmt.Errorf("error retrieveCompetition: %w", err)
 		}
@@ -1438,7 +1500,7 @@ func competitionRankingHandler(c echo.Context) error {
 	}
 
 	// 大会の存在確認
-	competition, err := retrieveCompetition(ctx, tenantDB, competitionID)
+	competition, err := retrieveCompetition(ctx, tenantDB, v.tenantID, competitionID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return echo.NewHTTPError(http.StatusNotFound, "competition not found")
@@ -1738,6 +1800,11 @@ func initializeHandler(c echo.Context) error {
 	err := initPlayerCache(c.Request().Context())
 	if err != nil {
 		return fmt.Errorf("error initPlayerCache: %w", err)
+	}
+
+	err = initCompetitionCache(c.Request().Context())
+	if err != nil {
+		return fmt.Errorf("error initCompetitionCache: %w", err)
 	}
 
 	out, err := exec.Command(initializeScript).CombinedOutput()
