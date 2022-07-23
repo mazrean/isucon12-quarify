@@ -1132,6 +1132,15 @@ func competitionFinishHandler(c echo.Context) error {
 			now, now, id, err,
 		)
 	}
+	competitionCache.Update(competitionCacheKey(v.tenantID, id), func(cr CompetitionRow) (CompetitionRow, bool) {
+		cr.FinishedAt = sql.NullInt64{
+			Int64: now,
+			Valid: true,
+		}
+		cr.UpdatedAt = now
+
+		return cr, true
+	})
 	return c.JSON(http.StatusOK, SuccessResult{Status: true})
 }
 
