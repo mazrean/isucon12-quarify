@@ -101,6 +101,7 @@ func createTenantDB(id int64) error {
 }
 
 // システム全体で一意なIDを生成する
+// TODO: N+1 & やばそう
 func dispenseID(ctx context.Context) (string, error) {
 	var id int64
 	var lastErr error
@@ -665,7 +666,7 @@ func tenantsBillingHandler(c echo.Context) error {
 		return fmt.Errorf("error Select tenant: %w", err)
 	}
 	tenantBillings := make([]TenantWithBilling, 0, len(ts))
-	for _, t := range ts {
+	for _, t := range ts { // TODO: N+1
 		if beforeID != 0 && beforeID <= t.ID {
 			continue
 		}
@@ -689,7 +690,7 @@ func tenantsBillingHandler(c echo.Context) error {
 			); err != nil {
 				return fmt.Errorf("failed to Select competition: %w", err)
 			}
-			for _, comp := range cs {
+			for _, comp := range cs { // TODO: N+1
 				report, err := billingReportByCompetition(ctx, tenantDB, t.ID, comp.ID)
 				if err != nil {
 					return fmt.Errorf("failed to billingReportByCompetition: %w", err)
@@ -795,7 +796,7 @@ func playersAddHandler(c echo.Context) error {
 	displayNames := params["display_name[]"]
 
 	pds := make([]PlayerDetail, 0, len(displayNames))
-	for _, displayName := range displayNames {
+	for _, displayName := range displayNames { // TODO: N+1
 		id, err := dispenseID(ctx)
 		if err != nil {
 			return fmt.Errorf("error dispenseID: %w", err)
@@ -1109,7 +1110,7 @@ func competitionScoreHandler(c echo.Context) error {
 	); err != nil {
 		return fmt.Errorf("error Delete player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, competitionID, err)
 	}
-	for _, ps := range playerScoreRows {
+	for _, ps := range playerScoreRows { // TODO: N+1
 		if _, err := tenantDB.NamedExecContext(
 			ctx,
 			"INSERT INTO player_score (id, tenant_id, player_id, competition_id, score, row_num, created_at, updated_at) VALUES (:id, :tenant_id, :player_id, :competition_id, :score, :row_num, :created_at, :updated_at)",
@@ -1162,7 +1163,7 @@ func billingHandler(c echo.Context) error {
 		return fmt.Errorf("error Select competition: %w", err)
 	}
 	tbrs := make([]BillingReport, 0, len(cs))
-	for _, comp := range cs {
+	for _, comp := range cs { // TODO: N+1
 		report, err := billingReportByCompetition(ctx, tenantDB, v.tenantID, comp.ID)
 		if err != nil {
 			return fmt.Errorf("error billingReportByCompetition: %w", err)
