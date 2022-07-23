@@ -1353,24 +1353,21 @@ func playerHandler(c echo.Context) error {
 	defer locker.RUnlock()
 
 	pss := make([]PlayerScoreRow, 0, len(cs))
-	for _, c := range cs {
-		ps := PlayerScoreRow{}
-		if err := tenantDB.GetContext(
-			ctx,
-			&ps,
-			// 最後にCSVに登場したスコアを採用する = row_numが一番大きいもの
-			"SELECT * FROM player_score WHERE tenant_id = ? AND competition_id = ? AND player_id = ? ORDER BY row_num DESC LIMIT 1",
-			v.tenantID,
-			c.ID,
-			p.ID,
-		); err != nil {
-			// 行がない = スコアが記録されてない
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, playerID=%s, %w", v.tenantID, c.ID, p.ID, err)
-		}
-		pss = append(pss, ps)
+	query, args, err := sqlx.In(
+		"SELECT ps.* FROM player_score AS ps WHERE ps.tenant_id = ? AND ps.player_id = ? AND ps.id = (SELECT ps2.id FROM player_score AS ps2 WHERE ps2.tenant_id = ps.tenant_id AND ps2.player_id = ps.player_id ORDER BY ps2.row_num DESC LIMIT 1)",
+		v.tenantID, playerID,
+	)
+	if err != nil {
+		return fmt.Errorf("error sqlx.In: %w", err)
+	}
+
+	if err := tenantDB.SelectContext(
+		ctx,
+		&pss,
+		query,
+		args...,
+	); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("error Select player_score: tenantID=%d, playerID=%s, %w", v.tenantID, p.ID, err)
 	}
 
 	psds := make([]PlayerScoreDetail, 0, len(pss))
