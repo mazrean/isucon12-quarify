@@ -950,12 +950,12 @@ func playerDisqualifiedHandler(c echo.Context) error {
 
 	var p *PlayerRow
 	playerCache.Update(playerCacheKey(v.tenantID, playerID), func(pr PlayerRow) (PlayerRow, bool) {
-		p.IsDisqualified = true
-		p.UpdatedAt = now
+		pr.IsDisqualified = true
+		pr.UpdatedAt = now
 
 		p = &pr
 
-		return *p, true
+		return pr, true
 	})
 
 	res := PlayerDisqualifiedHandlerResult{
