@@ -80,8 +80,18 @@ func tenantDBPath(id int64) string {
 }
 
 // テナントDBに接続する
-func connectToTenantDB(id int64) (*sqlx.DB, error) {
-	return adminDB, nil
+func connectToTenantDB(id int64) (*NoCloseDB, error) {
+	return &NoCloseDB{
+		DB: adminDB,
+	}, nil
+}
+
+type NoCloseDB struct {
+	*sqlx.DB
+}
+
+func (ndb *NoCloseDB) Close() error {
+	return nil
 }
 
 // テナントDBを新規に作成する
