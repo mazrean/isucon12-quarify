@@ -27,6 +27,9 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/lestrrat-go/jwx/v2/jwt"
+	isucache "github.com/mazrean/isucon-go-tools/cache"
+	isudb "github.com/mazrean/isucon-go-tools/db"
+	isuhttp "github.com/mazrean/isucon-go-tools/http"
 )
 
 const (
@@ -67,7 +70,7 @@ func connectAdminDB() (*sqlx.DB, error) {
 	config.DBName = getEnv("ISUCON_DB_NAME", "isuports")
 	config.ParseTime = true
 	dsn := config.FormatDSN()
-	return sqlx.Open("mysql", dsn)
+	return isudb.DBMetricsSetup(sqlx.Open)("mysql", dsn)
 }
 
 // テナントDBのパスを返す
@@ -79,7 +82,7 @@ func tenantDBPath(id int64) string {
 // テナントDBに接続する
 func connectToTenantDB(id int64) (*sqlx.DB, error) {
 	p := tenantDBPath(id)
-	db, err := sqlx.Open(sqliteDriverName, fmt.Sprintf("file:%s?mode=rw", p))
+	db, err := isudb.DBMetricsSetup(sqlx.Open)(sqliteDriverName, fmt.Sprintf("file:%s?mode=rw", p))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open tenant DB: %w", err)
 	}
@@ -133,7 +136,7 @@ func SetCacheControlPrivate(next echo.HandlerFunc) echo.HandlerFunc {
 
 // Run は cmd/isuports/main.go から呼ばれるエントリーポイントです
 func Run() {
-	e := echo.New()
+	e := isuhttp.EchoSetting(echo.New())
 	e.Debug = true
 	e.Logger.SetLevel(log.DEBUG)
 
@@ -214,13 +217,13 @@ func errorResponseHandler(err error, c echo.Context) {
 }
 
 type SuccessResult struct {
-	Status bool `json:"status"`
 	Data   any  `json:"data,omitempty"`
+	Status bool `json:"status"`
 }
 
 type FailureResult struct {
-	Status  bool   `json:"status"`
 	Message string `json:"message"`
+	Status  bool   `json:"status"`
 }
 
 // アクセスしてきた人の情報
@@ -345,9 +348,9 @@ func retrieveTenantRowFromHeader(c echo.Context) (*TenantRow, error) {
 }
 
 type TenantRow struct {
-	ID          int64  `db:"id"`
 	Name        string `db:"name"`
 	DisplayName string `db:"display_name"`
+	ID          int64  `db:"id"`
 	CreatedAt   int64  `db:"created_at"`
 	UpdatedAt   int64  `db:"updated_at"`
 }
@@ -359,12 +362,12 @@ type dbOrTx interface {
 }
 
 type PlayerRow struct {
-	TenantID       int64  `db:"tenant_id"`
 	ID             string `db:"id"`
 	DisplayName    string `db:"display_name"`
-	IsDisqualified bool   `db:"is_disqualified"`
+	TenantID       int64  `db:"tenant_id"`
 	CreatedAt      int64  `db:"created_at"`
 	UpdatedAt      int64  `db:"updated_at"`
+	IsDisqualified bool   `db:"is_disqualified"`
 }
 
 // 参加者を取得する
@@ -393,10 +396,10 @@ func authorizePlayer(ctx context.Context, tenantDB dbOrTx, id string) error {
 }
 
 type CompetitionRow struct {
-	TenantID   int64         `db:"tenant_id"`
 	ID         string        `db:"id"`
 	Title      string        `db:"title"`
 	FinishedAt sql.NullInt64 `db:"finished_at"`
+	TenantID   int64         `db:"tenant_id"`
 	CreatedAt  int64         `db:"created_at"`
 	UpdatedAt  int64         `db:"updated_at"`
 }
@@ -411,10 +414,10 @@ func retrieveCompetition(ctx context.Context, tenantDB dbOrTx, id string) (*Comp
 }
 
 type PlayerScoreRow struct {
-	TenantID      int64  `db:"tenant_id"`
 	ID            string `db:"id"`
 	PlayerID      string `db:"player_id"`
 	CompetitionID string `db:"competition_id"`
+	TenantID      int64  `db:"tenant_id"`
 	Score         int64  `db:"score"`
 	RowNum        int64  `db:"row_num"`
 	CreatedAt     int64  `db:"created_at"`
@@ -526,8 +529,8 @@ type BillingReport struct {
 
 type VisitHistoryRow struct {
 	PlayerID      string `db:"player_id"`
-	TenantID      int64  `db:"tenant_id"`
 	CompetitionID string `db:"competition_id"`
+	TenantID      int64  `db:"tenant_id"`
 	CreatedAt     int64  `db:"created_at"`
 	UpdatedAt     int64  `db:"updated_at"`
 }
@@ -1285,11 +1288,11 @@ func playerHandler(c echo.Context) error {
 }
 
 type CompetitionRank struct {
-	Rank              int64  `json:"rank"`
-	Score             int64  `json:"score"`
 	PlayerID          string `json:"player_id"`
 	PlayerDisplayName string `json:"player_display_name"`
-	RowNum            int64  `json:"-"` // APIレスポンスのJSONには含まれない
+	Rank              int64  `json:"rank"`
+	Score             int64  `json:"score"`
+	RowNum            int64  `json:"-"`
 }
 
 type CompetitionRankingHandlerResult struct {
@@ -1609,6 +1612,8 @@ type InitializeHandlerResult struct {
 // ベンチマーカーが起動したときに最初に呼ぶ
 // データベースの初期化などが実行されるため、スキーマを変更した場合などは適宜改変すること
 func initializeHandler(c echo.Context) error {
+	isucache.AllPurge()
+
 	out, err := exec.Command(initializeScript).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("error exec.Command: %s %e", string(out), err)
