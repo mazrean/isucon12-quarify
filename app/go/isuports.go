@@ -948,12 +948,16 @@ func playerDisqualifiedHandler(c echo.Context) error {
 		)
 	}
 
-	var p *PlayerRow
+	p, ok := playerCache.Load(playerCacheKey(v.tenantID, playerID))
+	if !ok {
+		return echo.NewHTTPError(http.StatusNotFound, "player not found")
+	}
+
 	playerCache.Update(playerCacheKey(v.tenantID, playerID), func(pr PlayerRow) (PlayerRow, bool) {
 		pr.IsDisqualified = true
 		pr.UpdatedAt = now
 
-		p = &pr
+		p = pr
 
 		return pr, true
 	})
