@@ -81,12 +81,7 @@ func tenantDBPath(id int64) string {
 
 // テナントDBに接続する
 func connectToTenantDB(id int64) (*sqlx.DB, error) {
-	p := tenantDBPath(id)
-	db, err := sqlx.Open(sqliteDriverName, fmt.Sprintf("file:%s?mode=rw", p))
-	if err != nil {
-		return nil, fmt.Errorf("failed to open tenant DB: %w", err)
-	}
-	return db, nil
+	return adminDB, nil
 }
 
 // テナントDBを新規に作成する
@@ -383,39 +378,13 @@ func playerCacheKey(tenantID int64, playerID string) string {
 }
 
 func initPlayerCache(ctx context.Context) error {
-	tenantDBDir := getEnv("ISUCON_TENANT_DB_DIR", "../tenant_db")
-	dir, err := os.ReadDir(tenantDBDir)
-	if err != nil {
-		return fmt.Errorf("failed to os.Stat: %w", err)
+	var players []PlayerRow
+	if err := adminDB.SelectContext(ctx, &players, "SELECT * FROM player"); err != nil {
+		return fmt.Errorf("failed to Select player: %w", err)
 	}
-
-	for _, file := range dir {
-		if file.IsDir() {
-			continue
-		}
-
-		if !strings.HasSuffix(file.Name(), ".db") {
-			continue
-		}
-		strTenantID := strings.TrimSuffix(file.Name(), ".db")
-		tenantID, err := strconv.Atoi(strTenantID)
-		if err != nil {
-			return fmt.Errorf("failed to strconv.Atoi: %w", err)
-		}
-
-		tenantDB, err := connectToTenantDB(int64(tenantID))
-		if err != nil {
-			return fmt.Errorf("failed to connectToTenantDB: %w", err)
-		}
-
-		var players []PlayerRow
-		if err := tenantDB.SelectContext(ctx, &players, "SELECT * FROM player"); err != nil {
-			return fmt.Errorf("failed to Select player: %w", err)
-		}
-		for _, player := range players {
-			key := playerCacheKey(player.TenantID, player.ID)
-			playerCache.Store(key, player)
-		}
+	for _, player := range players {
+		key := playerCacheKey(player.TenantID, player.ID)
+		playerCache.Store(key, player)
 	}
 
 	return nil
